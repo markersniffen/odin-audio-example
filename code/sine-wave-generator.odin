@@ -23,6 +23,7 @@ App :: struct {
 	buffer_size:  int,
 	ring_buffer:  Buffer,
 	mutex:        sync.Mutex,
+	sema:         sync.Sema,
 	hz:           f32,
 	key_pressed:  string,
 }
@@ -31,7 +32,7 @@ app: App
 
 main :: proc() {
 	rl.InitWindow(800, 600, "Sine Wave Generator")
-	// rl.SetTargetFPS(60)  
+	rl.SetTargetFPS(60)
 
 	fmt.println("Initializing audio buffer")
   result: ma.result
@@ -65,6 +66,10 @@ main :: proc() {
       ma.device_uninit(&app.device)
       return
   }
+
+  // start separate thread for generating audio samples
+  // pass in a pointer to "app" as the data
+  thread.run_with_data(&app, sample_generator_thread_proc)
 
   // main loop
 	for !rl.WindowShouldClose() {
@@ -100,27 +105,7 @@ main :: proc() {
 				app.key_pressed = key_name
 			}
 		}
-
-		// only write new samples if there is enough "free" space in the ring buffer
-		space_in_buffer := len(app.ring_buffer.data) - app.ring_buffer.written
-		if space_in_buffer > app.buffer_size * OUTPUT_NUM_CHANNELS {
-			sync.lock(&app.mutex)
-			for i in 0..<app.buffer_size {
-
-				// generate sample from note frequency
-				sample := math.sin(f32(math.PI) * 2 * app.hz * app.time)
-				
-				// write two samples, one for each channel
-				buffer_write_sample(&app.ring_buffer, sample, true)
-				buffer_write_sample(&app.ring_buffer, sample, true)
-
-				// advance the time
-				app.time += 1/f32(OUTPUT_SAMPLE_RATE)
-			}
-			sync.unlock(&app.mutex)
-		}
   }
-
   audio_quit()
 }
 
@@ -143,10 +128,40 @@ audio_callback :: proc(device: ^ma.device, output, input: rawptr, frame_count: u
 	device_buffer := mem.slice_ptr((^f32)(output), buffer_size)
 
 	// if there are enough samples written to the ring buffer to fill the device buffer, read them
-	if app.ring_buffer.written >= buffer_size {
+	if app.ring_buffer.written > buffer_size {
 		sync.lock(&app.mutex)
 		buffer_read(device_buffer, &app.ring_buffer, true)		
 		sync.unlock(&app.mutex)
+	}
+
+	// if the ring buffer is at least half empty, tell the sampler generator to start up again
+	if app.ring_buffer.written < len(app.ring_buffer.data)/2 do sync.sema_post(&app.sema)
+}
+
+sample_generator_thread_proc :: proc(data:rawptr) {
+	// cast the "data" we passed into the thread to an ^App
+	a := (^App)(data)
+
+	// loop infinitely in this new thread
+	for {
+
+		// we only want write new samples if there is enough "free" space in the ring buffer
+		// so stall the thread if we've filled over half the buffer
+		// and wait until the audio callback calls sema_post()
+		for a.ring_buffer.written > len(app.ring_buffer.data)/2 do sync.sema_wait(&a.sema)
+
+		sync.lock(&a.mutex)
+		for i in 0..<a.buffer_size {
+			// generate sample from note frequency
+			sample := math.sin(f32(math.PI) * 2 * a.hz * a.time)
+			// write two samples, one for each channel
+			buffer_write_sample(&a.ring_buffer, sample, true)
+			buffer_write_sample(&a.ring_buffer, sample, true)
+
+			// advance the time
+			a.time += 1/f32(OUTPUT_SAMPLE_RATE)
+		}
+		sync.unlock(&a.mutex)
 	}
 }
 
