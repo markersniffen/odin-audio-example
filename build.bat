@@ -1,0 +1,1 @@
+odin build ./code -out:./build/sine-wave-gen.exe
