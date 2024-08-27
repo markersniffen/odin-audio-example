@@ -9,6 +9,7 @@ import "core:time"
 import "core:fmt"
 import "base:runtime"
 import "core:math"
+import "core:strings"
 
 AUDIO_BUFFER_TYPE     :: f32
 OUTPUT_NUM_CHANNELS   :: 2
@@ -23,12 +24,13 @@ App :: struct {
 	ring_buffer:  Buffer,
 	mutex:        sync.Mutex,
 	hz:           f32,
+	key_pressed:  string,
 }
 
 app: App
 
 main :: proc() {
-	rl.InitWindow(1280, 720, "Sine Wave Generator")
+	rl.InitWindow(800, 600, "Sine Wave Generator")
 	// rl.SetTargetFPS(60)  
 
 	fmt.println("Initializing audio buffer")
@@ -53,10 +55,10 @@ main :: proc() {
   ma.device_get_info(&app.device, ma.device_type.playback, &info)
   app.buffer_size = int(app.device.playback.internalPeriodSizeInFrames)
 
-	// initialize audio buffer to be 8 times the size of the audio device buffer...
+	// initialize ring buffer to be 8 times the size of the audio device buffer...
 	buffer_init(&app.ring_buffer, app.buffer_size * OUTPUT_NUM_CHANNELS * 8)
 
-	// starts the audio device, and the audio callback thread
+	// starts the audio device and the audio callback thread
 	fmt.println("Starting MiniAudio Device:", runtime.cstring_to_string(cstring(&info.name[0])))
   if (ma.device_start(&app.device) != .SUCCESS) {
       fmt.println("Failed to start playback device.")
@@ -64,28 +66,40 @@ main :: proc() {
       return
   }
 
+  // main loop
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
 		defer rl.EndDrawing()
 		rl.ClearBackground(rl.BLACK)
 
+		rl.DrawText("Press Key:", 200, 150, 60, rl.WHITE)
+		rl.DrawText(rl.TextFormat("Freq: %4v", app.hz), 200, 210, 60, rl.WHITE)
+
 	  // KEYS
-	  //
     //     | s | d |    | g | h | j |
     //   | z | x | c | v | b | n | m |
 
-		if rl.IsKeyPressed(.Z) do app.hz = calc_freq_from_midi_note(60)
-		if rl.IsKeyPressed(.S) do app.hz = calc_freq_from_midi_note(61)
-		if rl.IsKeyPressed(.X) do app.hz = calc_freq_from_midi_note(62)
-		if rl.IsKeyPressed(.D) do app.hz = calc_freq_from_midi_note(63)
-		if rl.IsKeyPressed(.C) do app.hz = calc_freq_from_midi_note(64)
-		if rl.IsKeyPressed(.V) do app.hz = calc_freq_from_midi_note(65)
-		if rl.IsKeyPressed(.G) do app.hz = calc_freq_from_midi_note(66)
-		if rl.IsKeyPressed(.B) do app.hz = calc_freq_from_midi_note(67)
-		if rl.IsKeyPressed(.H) do app.hz = calc_freq_from_midi_note(68)
-		if rl.IsKeyPressed(.N) do app.hz = calc_freq_from_midi_note(69)
-		if rl.IsKeyPressed(.J) do app.hz = calc_freq_from_midi_note(70)
-		if rl.IsKeyPressed(.M) do app.hz = calc_freq_from_midi_note(71)
+    notes         := []f32 { 60,61,62,63,64,65,66,67,68,69,70,71 }
+    keyboard_keys := []rl.KeyboardKey {.Z,.S,.X,.D,.C,.V,.G,.B,.H,.N,.J,.M}
+    key_names     := []cstring { "Z","S","X","D","C","V","G","B","H","N","J","M" }
+    offsets       := [][2]i32{ {200,350}, {230,290}, {260,350}, {290,290}, {320,350}, {380,350}, {410,290}, {440,350}, {470,290}, {500,350}, {530,290}, {560,350} }
+
+    get_key_color :: proc(k:string) -> rl.Color {
+    	if app.key_pressed == k do return rl.WHITE
+    	return rl.GRAY
+    }
+
+		for key, ki in keyboard_keys {
+			key_name := string(key_names[ki])
+  		// draw keyboard
+			rl.DrawText(key_names[ki], offsets[ki].x, offsets[ki].y, 60, get_key_color(key_name))
+			
+			// get note frequency from key presses
+			if rl.IsKeyPressed(key) {
+				app.hz = calc_freq_from_midi_note(notes[ki])
+				app.key_pressed = key_name
+			}
+		}
 
 		// only write new samples if there is enough "free" space in the ring buffer
 		space_in_buffer := len(app.ring_buffer.data) - app.ring_buffer.written
@@ -93,7 +107,7 @@ main :: proc() {
 			sync.lock(&app.mutex)
 			for i in 0..<app.buffer_size {
 
-				// generate sample
+				// generate sample from note frequency
 				sample := math.sin(f32(math.PI) * 2 * app.hz * app.time)
 				
 				// write two samples, one for each channel
@@ -105,7 +119,6 @@ main :: proc() {
 			}
 			sync.unlock(&app.mutex)
 		}
-
   }
 
   audio_quit()
@@ -147,13 +160,6 @@ Buffer :: struct {
 
 buffer_init :: proc(b:^Buffer, size:int) {
 	b.data = make([]f32, size)
-}
-
-buffer_reset :: proc(b:^Buffer) {
-	mem.zero_slice(b.data)
-	b.write_pos = 0
-	b.read_pos = 0
-	b.written = 0
 }
 
 // this writes a single sample of data to the buffer, overwriting what was previously there
