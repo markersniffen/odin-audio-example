@@ -18,7 +18,7 @@ PREFERRED_BUFFER_SIZE :: 512
 OUTPUT_BUFFER_SIZE    :: OUTPUT_SAMPLE_RATE * size_of(f32) * OUTPUT_NUM_CHANNELS
 
 App :: struct {
-	time:         f32,
+	time:         f64,
 	device:       ma.device,
 	buffer_size:  int,
 	ring_buffer:  Buffer,
@@ -44,6 +44,7 @@ main :: proc() {
   device_config.sampleRate         = OUTPUT_SAMPLE_RATE
   device_config.dataCallback       = ma.device_data_proc(audio_callback)
   device_config.periodSizeInFrames = PREFERRED_BUFFER_SIZE
+  device_config.pUserData = nil
 
 	fmt.println("Configuring MiniAudio Device")
   if (ma.device_init(nil, &device_config, &app.device) != .SUCCESS) {
@@ -153,13 +154,13 @@ sample_generator_thread_proc :: proc(data:rawptr) {
 		sync.lock(&a.mutex)
 		for i in 0..<a.buffer_size {
 			// generate sample from note frequency
-			sample := math.sin(f32(math.PI) * 2 * a.hz * a.time)
+			sample := f32(math.sin(f64(math.PI * 2 * a.hz) * a.time))
 			// write two samples, one for each channel
 			buffer_write_sample(&a.ring_buffer, sample, true)
 			buffer_write_sample(&a.ring_buffer, sample, true)
 
 			// advance the time
-			a.time += 1/f32(OUTPUT_SAMPLE_RATE)
+			a.time += 1/f64(OUTPUT_SAMPLE_RATE)
 		}
 		sync.unlock(&a.mutex)
 	}
